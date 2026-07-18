@@ -1,4 +1,4 @@
-# Setup Guide
+# Setup Guide...
 
 Commands shown on screen for installing each pipeline tool. Tested on
 Ubuntu 22.04/24.04 and Amazon Linux 2023.
