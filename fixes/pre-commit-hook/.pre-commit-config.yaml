@@ -1,0 +1,30 @@
+# Gitleaks pre-commit configuration
+# ---------------------------------
+# Because this file lives IN the repo, every teammate gets the same
+# protection with a single `pre-commit install`.
+#
+# Setup:
+#   pip install pre-commit
+#   cp fixes/pre-commit-hook/.pre-commit-config.yaml .
+#   pre-commit install
+#
+# Then every `git commit` runs Gitleaks on the staged changes first and
+# aborts the commit if a secret is found.
+#
+# Run manually against everything:
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
+
+  # Handy extras that also catch "oops" commits before they land.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key      # blocks committed private keys
+      - id: check-added-large-files # often catches accidental dumps/archives
+      - id: end-of-file-fixer
+      - id: trailing-whitespace

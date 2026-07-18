@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#
+# Gitleaks pre-commit hook
+# ------------------------
+# Blocks a commit if a secret is found in the STAGED changes, so the secret
+# never enters git history in the first place.
+#
+# Install:
+#   cp fixes/pre-commit-hook/pre-commit .git/hooks/pre-commit
+#   chmod +x .git/hooks/pre-commit
+#
+# Note: .git/hooks/ is not committed, so this protects only your machine.
+# Use the pre-commit framework (.pre-commit-config.yaml) to share it.
+
+set -eu
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "⚠️  gitleaks not installed — skipping secret scan."
+  echo "    Install: https://github.com/gitleaks/gitleaks#installing"
+  exit 0
+fi
+
+echo "🔍 gitleaks: scanning staged changes for secrets..."
+
+# 'protect --staged' scans what you're about to commit, not the whole history.
+if gitleaks protect --staged --redact --verbose; then
+  echo "✅ No secrets found in staged changes."
+  exit 0
+fi
+
+cat <<'MSG'
+
+❌ COMMIT BLOCKED — a secret was detected in your staged changes.
+
+What to do:
+  1. Remove the secret from the code and load it from an environment
+     variable / secrets manager instead.
+  2. Re-stage and commit again.
+
+If this is a false positive or an intentional test value, add its
+fingerprint to .gitleaksignore rather than disabling the rule.
+
+To bypass in a genuine emergency (NOT recommended):
+  git commit --no-verify
+
+MSG
+exit 1
