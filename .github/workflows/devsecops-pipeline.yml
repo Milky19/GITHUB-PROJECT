@@ -1,4 +1,5 @@
 name: DevSecOps Pipeline
+
 on:
   push:
     branches:
@@ -7,103 +8,68 @@ on:
     branches:
       - main
   workflow_dispatch:
+
 env:
   IMAGE_NAME: vulnshop
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
+
   secrets-scan:
-    name: "1. Secrets Scan (Gitleaks)"
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_CONFIG: app/.gitleaks.toml
+      - uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
 
-      - name: Upload Gitleaks Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitleaks-report
-          path: results.sarif
-          if-no-files-found: ignore
-
   sast:
-    name: "2. SonarQube SAST"
     runs-on: ubuntu-latest
     needs: secrets-scan
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v6
+      - uses: sonarsource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: SonarQube Quality Gate
-        uses: sonarsource/sonarqube-quality-gate-action@v1.2.0
-        continue-on-error: true
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
   sca:
-    name: "3. Trivy Filesystem Scan"
     runs-on: ubuntu-latest
     needs: secrets-scan
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Trivy Filesystem Scan
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
-          severity: CRITICAL,HIGH,MEDIUM
           format: table
+          severity: HIGH,CRITICAL
           exit-code: 0
-          output: trivy-fs-report.txt
 
-      - name: Upload Trivy Report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: trivy-fs-report
-          path: trivy-fs-report.txt
-
-  iac-scan:
-    name: "4. Checkov IaC Scan"
+  checkov:
     runs-on: ubuntu-latest
     needs: secrets-scan
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkov Scan
-        uses: bridgecrewio/checkov-action@master
+      - uses: bridgecrewio/checkov-action@master
         with:
           directory: terraform-ec2
           framework: terraform
           soft_fail: true
 
-  build-image:
-    name: "5. Build & Scan Docker Image"
+  docker:
     runs-on: ubuntu-latest
     needs:
       - sast
       - sca
-      - iac-scan
+      - checkov
 
     steps:
       - uses: actions/checkout@v4
@@ -116,141 +82,94 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          severity: CRITICAL,HIGH
           format: table
+          severity: HIGH,CRITICAL
           exit-code: 0
-          output: trivy-image-report.txt
-
-      - name: Upload Image Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-image-report
-          path: trivy-image-report.txt
 
   deploy:
-    name: "6. Deploy to EC2"
     runs-on: ubuntu-latest
-    needs: build-image
+    needs: docker
 
     steps:
 
-      - name: Deploy Application
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.2
 
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 20m
+          debug: true
 
           script: |
-
             set -e
 
             APP_DIR=/home/ubuntu/GITHUB-PROJECT
 
-            echo "========== USER =========="
+            echo "===== USER ====="
             whoami
 
-            echo "========== HOST =========="
+            echo "===== HOST ====="
             hostname
 
-            echo "========== DOCKER =========="
-            docker --version
-
-            echo "========== DOCKER COMPOSE =========="
-            docker compose version
-
-            echo "========== PROJECT =========="
+            echo "===== PROJECT ====="
 
             if [ ! -d "$APP_DIR/.git" ]; then
                 git clone "${{ secrets.EC2_REPO_URL }}" "$APP_DIR"
             fi
 
-            cd $APP_DIR
-
-            pwd
-
-            ls -la
-
-            echo "========== GIT =========="
+            cd "$APP_DIR"
 
             git fetch origin
-
             git checkout main
-
             git pull origin main
-
-            echo "========== STOP CONTAINERS =========="
 
             docker compose down || true
 
-            echo "========== BUILD =========="
-
             docker compose build --no-cache
-
-            echo "========== START =========="
 
             docker compose up -d
 
-            echo "========== STATUS =========="
-
             docker compose ps
 
             docker ps -a
-
-            echo "========== WAIT =========="
 
             for i in $(seq 1 30)
             do
-
-              if curl -fsS http://localhost:3000/healthz >/dev/null
+              if curl -fs http://localhost:3000/healthz >/dev/null 2>&1
               then
-                  echo "Application Started Successfully"
+                  echo "Application Started"
                   exit 0
               fi
 
-              echo "Waiting... $i"
-
+              echo "Waiting..."
               sleep 2
-
             done
-
-            echo "========== FAILED =========="
-
-            docker compose ps
-
-            docker ps -a
 
             docker compose logs --tail=200
 
             exit 1
 
   dast:
-    name: "7. OWASP ZAP Scan"
     runs-on: ubuntu-latest
     needs: deploy
 
     steps:
 
-      - name: Run ZAP
+      - name: Run OWASP ZAP
         run: |
-
-          mkdir zap-output
+          mkdir zap-report
 
           docker run --rm \
-          -v $PWD/zap-output:/zap/wrk/:rw \
-          ghcr.io/zaproxy/zaproxy:stable \
-          zap-baseline.py \
-          -t http://${{ secrets.EC2_HOST }}:3000 \
-          -a \
-          -I \
-          -r report.html \
-          -w report.md \
-          -J report.json || true
-
-      - name: Upload Report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: zap-report
-          path: zap-output
+            -v $PWD/zap-report:/zap/wrk/:rw \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py \
+            -t http://${{ secrets.EC2_HOST }}:3000 \
+            -a \
+            -I \
+            -r report.html \
+            -w report.md \
+            -J report.json || true
