@@ -12,7 +12,6 @@ env:
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-
   secrets-scan:
     name: "1. Secrets Scan (Gitleaks)"
     runs-on: ubuntu-latest
