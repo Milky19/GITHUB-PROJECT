@@ -1,5 +1,4 @@
 name: DevSecOps Pipeline
-
 # Runs the full shift-left security pipeline on every push/PR to main:
 # secrets scan -> SAST -> SCA -> container build+scan -> IaC scan -> deploy -> DAST
 # Each stage produces an artifact report so findings can be reviewed even
